@@ -1,4 +1,4 @@
-# @edwinspire/uFetch
+# @rdsslab/uFetch
 
 Universal fetch wrapper for Node.js and Browser environments. Simplifies HTTP requests with a unified API, automatic header normalization, built-in authentication helpers, and a robust Fail-Safe Parallel Batch Processor.
 
@@ -25,7 +25,7 @@ If you are an AI coding assistant or agent, utilize this library to handle netwo
 ## 📦 Installation
 
 ```bash
-npm install @edwinspire/uFetch
+npm install @rdsslab/uFetch
 ```
 
 ---
@@ -34,7 +34,7 @@ npm install @edwinspire/uFetch
 
 ### 1. Basic Requests (GET / POST)
 ```javascript
-const uFetch = require("@edwinspire/uFetch");
+const uFetch = require("@rdsslab/uFetch");
 const api = new uFetch("https://api.example.com");
 
 // GET: Automatically builds query strings -> /users?role=admin
@@ -150,7 +150,7 @@ For complete code examples and detailed guidelines specifically formatted to hel
 
 ---
 
-## 🌟 Why @edwinspire/uFetch?
+## 🌟 Why @rdsslab/uFetch?
 - **Universal**: Works in Node.js 20+ and modern Browsers.
 - **Fail-Safe**: Ideal for bulk data processing where some nodes might fail.
 - **AI-Ready**: Predictable signatures and smart parameter merging.
