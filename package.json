@@ -1,5 +1,5 @@
 {
-  "name": "@edwinspire/universal-fetch",
+  "name": "@rdsslab/universal-fetch",
   "description": "Class to use fetch in Nodejs and in the browser",
   "version": "3.0.1",
   "author": "edwinspire <edwinspire@gmail.com>",
@@ -13,7 +13,7 @@
   "tags": [
     "fetch",
     "node",
-    "browser"
+    "browser", "edwinspire"
   ],
   "scripts": {
     "test": "node test/example-get.js && node test/example-post.js && node test/example-batch.js",
@@ -27,10 +27,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/edwinspire/universal-fetch"
+    "url": "https://github.com/rdsslab/uFetch"
   },
   "bugs": {
-    "url": "https://github.com/edwinspire/universal-fetch/issues"
+    "url": "https://github.com/rdsslab/uFetch/issues"
   },
   "main": "src/fetch.js"
 }
