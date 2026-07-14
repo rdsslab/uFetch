@@ -105,6 +105,7 @@ For complete code examples and detailed guidelines specifically formatted to hel
 - [POST Requests Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-post.md): Details request body auto-serialization (JSON vs native bodies).
 - [PATCH & DELETE Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-patch-delete.md): Explains partial updates and resources deletion.
 - [Authentication & Request Cancellation Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-request-abort.md): Demonstrates Bearer tokens, custom request execution, and using `abort()`.
+- [Timeout Configuration Test Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-timeout.md): Demonstrates global timeouts, per-request overrides, and batch item timeout overrides.
 - [Simple Batch Processing Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-batch-simple.md): Highlights the new single configuration object signature for parallel request batching.
 - [Advanced Batch Processing Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-batch.md): Details how to perform concurrent batches with per-item overrides and concurrency limits.
 
