@@ -1,7 +1,7 @@
 {
   "name": "@rdsslab/universal-fetch",
   "description": "Class to use fetch in Nodejs and in the browser",
-  "version": "3.0.1",
+  "version": "4.0.2",
   "author": "edwinspire <edwinspire@gmail.com>",
   "type": "commonjs",
   "engines": {
@@ -13,17 +13,22 @@
   "tags": [
     "fetch",
     "node",
-    "browser", "edwinspire"
+    "browser",
+    "edwinspire"
   ],
   "scripts": {
-    "test": "node test/example-get.js && node test/example-post.js && node test/example-batch.js",
+    "test": "node test/example-get.js && node test/example-post.js && node test/example-batch.js && node test/example-timeout.js",
     "test:get": "node test/example-get.js",
     "test:post": "node test/example-post.js",
     "test:batch": "node test/example-batch.js",
     "test:batch-simple": "node test/example-batch-simple.js",
     "test:abort": "node test/example-request-abort.js",
+    "test:timeout": "node test/example-timeout.js",
     "test:patch-delete": "node test/example-patch-delete.js",
     "set_version": "node ./set_version.js"
+  },
+  "dependencies": {
+    "undici": "^7.13.0"
   },
   "repository": {
     "type": "git",

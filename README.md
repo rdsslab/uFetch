@@ -60,6 +60,12 @@ api.delete({
   url: "/users",
   body: { id: 99, reason: "inactivity" }
 });
+
+// Per-request timeout override
+api.get({
+  url: "/exports/monthly",
+  timeout: 120000
+});
 ```
 
 ### 2. Fail-Safe Parallel Batch Processing
@@ -106,16 +112,80 @@ For complete code examples and detailed guidelines specifically formatted to hel
 
 ## 📚 API Reference
 
+## ⏱️ Timeout Configuration
+
+uFetch applies a default timeout of `3600000` ms (1 hour) to every request. This default is intentionally long to support slow downloads and large responses in both Node.js and browser environments.
+
+### Global timeout defaults
+
+Use `setTimeouts()` to configure the default request timeout and, in Node.js, the Undici dispatcher timeouts used by `fetch`.
+
+```javascript
+const uFetch = require("@rdsslab/uFetch");
+
+const api = new uFetch("https://api.example.com").setTimeouts({
+  timeout: 3600000,
+  headersTimeout: 3600000,
+  bodyTimeout: undefined,
+  socketTimeout: undefined,
+});
+```
+
+If you only need the browser-style abort timeout, `setAbortTimeout()` is available as a convenience alias for updating the global `timeout` value.
+
+```javascript
+const api = new uFetch("https://api.example.com").setAbortTimeout(90000);
+```
+
+### Per-request timeout overrides
+
+Every request shortcut accepts an optional `timeout` field in its options object: `get`, `post`, `put`, `patch`, `delete`, and `batch`.
+
+```javascript
+await api.post({
+  url: "/jobs",
+  data: { type: "sync" },
+  timeout: 30000,
+});
+
+const batchResults = await api.batch({
+  url: "/users",
+  timeout: 60000,
+  items: [
+    { data: { id: 1 }, timeout: 5000 },
+    { data: { id: 2 } },
+  ],
+});
+```
+
+### Timeout errors
+
+Timeout failures rethrow the original error object after updating its message in English. The stack and runtime-specific properties are preserved.
+
+Expected timeout message format:
+
+```text
+Request timed out after 30000 ms
+```
+
+In Node.js, the original Undici error code is still available when the runtime exposes it. In browsers, timeout aborts surface as `AbortError` failures with the updated message.
+
+### Migration note
+
+Timeout messages are now emitted in English.
+
 ### `class uFetch`
 
-#### `constructor(url?: string, redirect_in_unauthorized?: string)`
+#### `constructor(url?: string, redirect_in_unauthorized?: string, timeoutOptions?: { timeout?: number, headersTimeout?: number, bodyTimeout?: number, socketTimeout?: number })`
 * `url`: Default base URL for relative paths.
 * `redirect_in_unauthorized`: URL to redirect to on 401 (Browser only).
+* `timeoutOptions`: Default timeout configuration. `timeout` defaults to `3600000` ms (1 hour).
 
-#### `request(url, method, data, headers, options, body) => Promise<Response>`
+#### `request(url, method, data, headers, options, body, timeout) => Promise<Response>`
 * Core method for all requests.
 * `data`: Query parameters for `GET`/`HEAD`/`DELETE`, Body for others (when `body` is not defined).
 * `body`: (Optional) Explicit request body payload. If set, always travels in the request body.
+* `timeout`: (Optional) Request-specific timeout in milliseconds. You can also pass `options.timeout`.
 
 #### `batch(opts) => Promise<Array<Result>>`
 * `opts`: Configuration object:
@@ -123,9 +193,10 @@ For complete code examples and detailed guidelines specifically formatted to hel
   * `method`: Base HTTP method (default: `"GET"`).
   * `items`: Array of data payloads or override-config objects.
     * A raw payload: e.g. `{ edad: 12 }` (sent directly as body/query data).
-    * An override-config object: e.g. `{ data: { filter: "active" }, body: { edad: 12 }, url: "/custom-url" }` (keys like `url`, `method`, `headers`, `options` override the base batch configuration, `data` overrides query parameters, and `body` overrides request body).
+    * An override-config object: e.g. `{ data: { filter: "active" }, body: { edad: 12 }, url: "/custom-url", timeout: 5000 }` (keys like `url`, `method`, `headers`, `options`, and `timeout` override the base batch configuration, `data` overrides query parameters, and `body` overrides request body).
   * `headers`: Base headers to merge.
   * `options`: Base Fetch options.
+  * `timeout`: (Optional) Default timeout for each batch request.
   * `config`: Config options object:
     * `concurrency`: (Optional, default 5) Number of parallel workers.
     * `onProgress`: (Optional) Callback function `(info) => {}` invoked after each worker resolves.
@@ -138,9 +209,17 @@ For complete code examples and detailed guidelines specifically formatted to hel
 
 #### `get | post | put | patch | delete (opts)`
 * Convenience wrappers for `request`. 
-* `opts`: `{ url, data, body, headers, options }`.
+* `opts`: `{ url, data, body, headers, options, timeout }`.
   * `data`: Query parameters for `get`/`delete`, request body payload for `post`/`put`/`patch`.
   * `body`: Explicit request body payload (always sent in HTTP body, takes precedence over `data` for the body).
+  * `timeout`: Per-request timeout in milliseconds.
+
+#### `setTimeouts({ timeout, headersTimeout, bodyTimeout, socketTimeout })`
+* Updates the global timeout defaults for the instance.
+* Returns the current instance for chaining.
+
+#### `setAbortTimeout(timeout)`
+* Convenience helper that updates only the global `timeout` value.
 
 #### `setBasicAuthorization(user, pass)` | `setBearerAuthorization(token)`
 * Global authorization helpers that persist for the instance life.

@@ -1,6 +1,22 @@
 "use strict";
 
 const regexIsAbsolute = /^[a-zA-Z][a-zA-Z\d+\-.]*:/;
+const DEFAULT_TIMEOUT_CONFIG = {
+  timeout: 3600000,
+  headersTimeout: 3600000,
+  bodyTimeout: undefined,
+  socketTimeout: undefined,
+};
+const NODE_TIMEOUT_ERROR_CODE_TO_CONFIG_KEY = {
+  UND_ERR_HEADERS_TIMEOUT: "headersTimeout",
+  UND_ERR_BODY_TIMEOUT: "bodyTimeout",
+  UND_ERR_SOCKET: "socketTimeout",
+};
+
+const isNodeRuntime = () =>
+  typeof process !== "undefined" &&
+  process.versions != null &&
+  process.versions.node != null;
 
 /**
  * Dynamically selects fetch from the environment (browser / node)
@@ -54,13 +70,18 @@ class uFetch {
    * Initializes the HTTP client instance.
    * @param {string} [url=undefined] - (Optional) Default base URL to use in requests.
    * @param {string} [redirect_in_unauthorized=undefined] - (Optional) Route or URL to automatically redirect the client in case of 401 error (Only in Browser environment with window).
+   * @param {{timeout?: number, headersTimeout?: number, bodyTimeout?: number, socketTimeout?: number}} [timeoutOptions] - Default timeout configuration. The default request timeout is 1 hour.
    */
-  constructor(url = undefined, redirect_in_unauthorized = undefined) {
+  constructor(url = undefined, redirect_in_unauthorized = undefined, timeoutOptions = DEFAULT_TIMEOUT_CONFIG) {
     this._redirect_in_unauthorized_internal = redirect_in_unauthorized;
     this._basic_authentication = undefined;
     this._bearer_authentication = undefined;
     this._url = url;
     this._defaultHeaders = new Map();
+    this._timeoutConfig = { ...DEFAULT_TIMEOUT_CONFIG, ...(timeoutOptions || {}) };
+    this._undiciDispatcher = undefined;
+
+    this._refreshUndiciDispatcher();
 
     if (typeof AbortController !== "undefined") {
       this._abortController = new AbortController();
@@ -173,6 +194,186 @@ class uFetch {
     this._defaultHeaders.set(key, value);
   }
 
+  /**
+   * Configures the default timeout behavior for all future requests.
+   * @param {{timeout?: number, headersTimeout?: number, bodyTimeout?: number, socketTimeout?: number}} [opts={}] - Timeout values in milliseconds.
+   * @returns {uFetch}
+   */
+  setTimeouts(opts = {}) {
+    this._timeoutConfig = { ...this._timeoutConfig, ...opts };
+    this._refreshUndiciDispatcher();
+    return this;
+  }
+
+  /**
+   * Convenience helper for browser-style abort timeouts.
+   * @param {number} timeout - Timeout in milliseconds.
+   * @returns {uFetch}
+   */
+  setAbortTimeout(timeout) {
+    return this.setTimeouts({ timeout });
+  }
+
+  _refreshUndiciDispatcher() {
+    if (!isNodeRuntime()) {
+      return;
+    }
+
+    this._destroyUndiciDispatcher();
+
+    try {
+      const { Agent } = require("undici");
+      const { headersTimeout, bodyTimeout, socketTimeout } = this._timeoutConfig;
+      const dispatcherOptions = {};
+
+      if (Number.isFinite(headersTimeout)) {
+        dispatcherOptions.headersTimeout = headersTimeout;
+      }
+      if (Number.isFinite(bodyTimeout)) {
+        dispatcherOptions.bodyTimeout = bodyTimeout;
+      }
+      if (Number.isFinite(socketTimeout)) {
+        dispatcherOptions.socketTimeout = socketTimeout;
+      }
+
+      this._undiciDispatcher = new Agent(dispatcherOptions);
+    } catch (err) {
+      this._undiciDispatcher = undefined;
+    }
+  }
+
+  _destroyUndiciDispatcher() {
+    if (!this._undiciDispatcher) {
+      return;
+    }
+
+    try {
+      if (typeof this._undiciDispatcher.destroy === "function") {
+        this._undiciDispatcher.destroy();
+      } else if (typeof this._undiciDispatcher.close === "function") {
+        this._undiciDispatcher.close();
+      }
+    } catch (err) {
+      // Ignore dispatcher teardown failures; a fresh dispatcher will be created when possible.
+    }
+
+    this._undiciDispatcher = undefined;
+  }
+
+  _mergeSignals(signals = []) {
+    const activeSignals = signals.filter(Boolean);
+
+    if (activeSignals.length === 0 || typeof AbortController === "undefined") {
+      return {
+        signal: undefined,
+        cleanup: () => {},
+      };
+    }
+
+    if (activeSignals.length === 1) {
+      return {
+        signal: activeSignals[0],
+        cleanup: () => {},
+      };
+    }
+
+    const controller = new AbortController();
+    const listeners = [];
+
+    const abortFromSignal = (sourceSignal) => {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      const reason = sourceSignal && "reason" in sourceSignal ? sourceSignal.reason : undefined;
+      controller.abort(reason);
+    };
+
+    for (const sourceSignal of activeSignals) {
+      if (sourceSignal.aborted) {
+        abortFromSignal(sourceSignal);
+        return {
+          signal: controller.signal,
+          cleanup: () => {},
+        };
+      }
+
+      const onAbort = () => abortFromSignal(sourceSignal);
+      sourceSignal.addEventListener("abort", onAbort, { once: true });
+      listeners.push(() => sourceSignal.removeEventListener("abort", onAbort));
+    }
+
+    return {
+      signal: controller.signal,
+      cleanup: () => {
+        for (const removeListener of listeners) {
+          removeListener();
+        }
+      },
+    };
+  }
+
+  _applyTimeout(signal, timeoutMs) {
+    if (
+      typeof AbortController === "undefined" ||
+      !Number.isFinite(timeoutMs) ||
+      timeoutMs < 0
+    ) {
+      return {
+        signal,
+        cleanup: () => {},
+        didTimeout: () => false,
+      };
+    }
+
+    const timeoutController = new AbortController();
+    let didTimeout = false;
+    const timer = setTimeout(() => {
+      didTimeout = true;
+      timeoutController.abort();
+    }, timeoutMs);
+
+    const mergedSignal = this._mergeSignals([signal, timeoutController.signal]);
+
+    return {
+      signal: mergedSignal.signal,
+      cleanup: () => {
+        clearTimeout(timer);
+        mergedSignal.cleanup();
+      },
+      didTimeout: () => didTimeout,
+    };
+  }
+
+  _getTimeoutMessageDuration(err, requestTimeoutMs) {
+    const timeoutConfigKey = err && err.code ? NODE_TIMEOUT_ERROR_CODE_TO_CONFIG_KEY[err.code] : undefined;
+
+    if (timeoutConfigKey && Number.isFinite(this._timeoutConfig[timeoutConfigKey])) {
+      return this._timeoutConfig[timeoutConfigKey];
+    }
+
+    if (Number.isFinite(requestTimeoutMs)) {
+      return requestTimeoutMs;
+    }
+
+    if (Number.isFinite(this._timeoutConfig.timeout)) {
+      return this._timeoutConfig.timeout;
+    }
+
+    return undefined;
+  }
+
+  _setErrorMessage(err, message) {
+    try {
+      err.message = message;
+    } catch (assignError) {
+      Object.defineProperty(err, "message", {
+        configurable: true,
+        value: message,
+      });
+    }
+  }
+
   _addAuthorizationHeader(headers) {
     if (this._basic_authentication) {
       headers.set("Authorization", this._basic_authentication);
@@ -256,8 +457,9 @@ class uFetch {
    * @param {string} [method="GET"] - HTTP verb in uppercase (GET, POST, PUT, DELETE, PATCH, etc).
    * @param {any} [data=undefined] - Parameters sent as a querystring for GET/HEAD/DELETE, or as request body for POST/PUT/PATCH (when body is not defined).
    * @param {Object} [headers={}] - Additional dictionary of ephemeral headers living only for this specific transaction.
-   * @param {RequestInit} [options={}] - Base object for strict overriding of primitive Fetch options (Credentials, Caching, Mode, custom Signal, etc).
+   * @param {RequestInit & {timeout?: number}} [options={}] - Base object for strict overriding of primitive Fetch options (Credentials, Caching, Mode, custom Signal, etc).
    * @param {any} [body=undefined] - (Optional) Explicit body payload sent in the request body. If set, takes precedence over data for the HTTP body.
+   * @param {number} [timeout=undefined] - Optional request-specific timeout in milliseconds.
    * @returns {Promise<Response>} Promise resolving to the Fetch Response object.
    * @throws Exception when asynchronous URL validation fails locally or fetch explicitly fails.
    */
@@ -268,6 +470,7 @@ class uFetch {
     headers = {},
     options = {},
     body = undefined,
+    timeout = undefined,
   ) {
     method = method.toUpperCase();
 
@@ -322,14 +525,33 @@ class uFetch {
     }
 
     const requestBody = this._createBody(bodyPayload);
+    const requestOptions =
+      options && typeof options === "object" && !Array.isArray(options) ? options : {};
+    const { timeout: optionsTimeout, ...fetchOptions } = requestOptions;
+    const timeoutMs =
+      timeout !== undefined
+        ? timeout
+        : (optionsTimeout !== undefined ? optionsTimeout : this._timeoutConfig.timeout);
+    const mergedSignal = this._mergeSignals([
+      this._abortController ? this._abortController.signal : undefined,
+      fetchOptions.signal,
+    ]);
+    const timeoutState = this._applyTimeout(mergedSignal.signal, timeoutMs);
 
     const opts = {
+      ...fetchOptions,
       method,
       headers: h,
       body: requestBody,
-      ...(this._abortController ? { signal: this._abortController.signal } : {}),
-      ...options,
     };
+
+    if (timeoutState.signal) {
+      opts.signal = timeoutState.signal;
+    }
+
+    if (!opts.dispatcher && this._undiciDispatcher) {
+      opts.dispatcher = this._undiciDispatcher;
+    }
 
     let response;
     try {
@@ -346,8 +568,20 @@ class uFetch {
 
       return response;
     } catch (err) {
+      const timeoutMessageDuration = this._getTimeoutMessageDuration(err, timeoutMs);
+
+      if (
+        timeoutMessageDuration !== undefined &&
+        (timeoutState.didTimeout() || NODE_TIMEOUT_ERROR_CODE_TO_CONFIG_KEY[err.code])
+      ) {
+        this._setErrorMessage(err, `Request timed out after ${timeoutMessageDuration} ms`);
+      }
+
       console.error(err);
       throw err;
+    } finally {
+      timeoutState.cleanup();
+      mergedSignal.cleanup();
     }
   }
 
@@ -355,11 +589,11 @@ class uFetch {
 
   /**
    * Triggers a read query ("GET" verb). Automatically and transparently serializes `opts.data` using search query strings (e.g., url?foo=bar).
-   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit}} opts - Configuration wrapper object (URL, query params, body payload, local headers and init options).
+   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit, timeout?: number}} opts - Configuration wrapper object (URL, query params, body payload, local headers, init options and timeout).
    * @returns {Promise<Response>} Original HTTP Promise from the `fetch` API.
    */
   get(opts = {}) {
-    return this.request(opts.url, "GET", opts.data, opts.headers, opts.options, opts.body);
+    return this.request(opts.url, "GET", opts.data, opts.headers, opts.options, opts.body, opts.timeout);
   }
 
   /** @deprecated Use get() instead. */
@@ -371,7 +605,7 @@ class uFetch {
   /**
    * Triggers a mutation/insertion via an endpoint consuming a "POST" verb.
    * By default, stringifies the `data` (or `body` if provided) to JSON without encoding.
-   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit}} opts
+   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit, timeout?: number}} opts
    * @returns {Promise<Response>}
    */
   post(opts = {}) {
@@ -382,6 +616,7 @@ class uFetch {
       opts.headers,
       opts.options,
       opts.body,
+      opts.timeout,
     );
   }
 
@@ -393,11 +628,11 @@ class uFetch {
 
   /**
    * Replaces existing information by injecting the complete data payload to the router using the "PUT" verb.
-   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit}} opts
+   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit, timeout?: number}} opts
    * @returns {Promise<Response>}
    */
   put(opts = {}) {
-    return this.request(opts.url, "PUT", opts.data, opts.headers, opts.options, opts.body);
+    return this.request(opts.url, "PUT", opts.data, opts.headers, opts.options, opts.body, opts.timeout);
   }
 
   /** @deprecated Use put() instead. */
@@ -408,7 +643,7 @@ class uFetch {
 
   /**
    * Controlled backend partial mutation dictated by the "PATCH" verb, modifying fragments.
-   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit}} opts
+   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit, timeout?: number}} opts
    * @returns {Promise<Response>}
    */
   patch(opts = {}) {
@@ -419,6 +654,7 @@ class uFetch {
       opts.headers,
       opts.options,
       opts.body,
+      opts.timeout,
     );
   }
 
@@ -430,7 +666,7 @@ class uFetch {
 
   /**
    * Orders to clear / destroy a resource tuple pointed at by `url` by sending a "DELETE" verb.
-   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit}} opts
+   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit, timeout?: number}} opts
    * @returns {Promise<Response>}
    */
   delete(opts = {}) {
@@ -441,6 +677,7 @@ class uFetch {
       opts.headers,
       opts.options,
       opts.body,
+      opts.timeout,
     );
   }
 
@@ -475,7 +712,8 @@ class uFetch {
    * @param {string} [opts.method="GET"] - Base HTTP verb (fallback).
    * @param {Array<any>} opts.items - Collection to process. Supports raw data or override-config objects.
    * @param {Object} [opts.headers={}] - Base headers to merge.
-   * @param {Object} [opts.options={}] - Base Fetch options (RequestInit).
+  * @param {Object} [opts.options={}] - Base Fetch options (RequestInit).
+  * @param {number} [opts.timeout] - Default timeout applied to each request in the batch unless overridden by an item.
    * @param {Object} [opts.config={}] - Batch settings.
    * @param {number} [opts.config.concurrency=5] - Parallel worker limit.
    * @param {Function} [opts.config.onProgress] - Callback invoked after each request resolution: (info) => void.
@@ -508,6 +746,7 @@ class uFetch {
       items: reqItems = [],
       headers: reqHeaders = {},
       options: reqOptions = {},
+      timeout: reqTimeout = undefined,
       config: reqConfig = {},
     } = opts;
 
@@ -541,12 +780,21 @@ class uFetch {
           let reqBodyVal = undefined;
           let reqHeadersVal = reqHeaders;
           let reqOptionsVal = reqOptions;
+          let reqTimeoutVal = reqTimeout;
 
           // Smart detection: if item is an object that looks like a request config, use it to override base params
           if (
             typeof item === "object" &&
             item !== null &&
-            (item.url || item.method || item.hasOwnProperty("data") || item.hasOwnProperty("body") || item.headers || item.options)
+            (
+              item.url ||
+              item.method ||
+              item.hasOwnProperty("data") ||
+              item.hasOwnProperty("body") ||
+              item.hasOwnProperty("timeout") ||
+              item.headers ||
+              item.options
+            )
           ) {
             reqUrl = item.url || url;
             reqMethodVal = item.method || reqMethod;
@@ -554,6 +802,7 @@ class uFetch {
             reqBodyVal = item.hasOwnProperty("body") ? item.body : undefined;
             reqHeadersVal = item.headers ? { ...reqHeaders, ...item.headers } : reqHeaders;
             reqOptionsVal = item.options ? { ...reqOptions, ...item.options } : reqOptions;
+            reqTimeoutVal = item.hasOwnProperty("timeout") ? item.timeout : reqTimeout;
           }
 
           response = await this.request(
@@ -562,7 +811,8 @@ class uFetch {
             reqData,
             reqHeadersVal,
             reqOptionsVal,
-            reqBodyVal
+            reqBodyVal,
+            reqTimeoutVal
           );
 
           const parser = responseParser || defaultResponseParser;
