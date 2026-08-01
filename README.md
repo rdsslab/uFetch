@@ -67,6 +67,14 @@ api.get({
   url: "/exports/monthly",
   timeout: 120000
 });
+
+// QUERY: Safe/idempotent read with a JSON body (complex filters that don't fit a query string).
+// Note: "QUERY" is a draft IETF HTTP method — not yet universally supported by
+// proxies/load balancers/servers, unlike GET/POST/etc.
+api.query({
+  url: "/users/search",
+  data: { role: "admin", createdAfter: "2026-01-01" }
+});
 ```
 
 ### 2. Fail-Safe Parallel Batch Processing
@@ -170,7 +178,7 @@ const api = new uFetch("https://api.example.com").setAbortTimeout(90000);
 
 ### Per-request timeout overrides
 
-Every request shortcut accepts an optional `timeout` field in its options object: `get`, `post`, `put`, `patch`, `delete`, and `batch`.
+Every request shortcut accepts an optional `timeout` field in its options object: `get`, `post`, `put`, `patch`, `delete`, `query`, and `batch`.
 
 ```javascript
 await api.post({
@@ -229,7 +237,7 @@ const api = new uFetch("https://api.example.com", {
 
 #### `request(url, method, data, headers, options, body, timeout) => Promise<Response>`
 * Core method for all requests.
-* `data`: Query parameters for `GET`/`HEAD`/`DELETE`, Body for others (when `body` is not defined).
+* `data`: Query parameters for `GET`/`HEAD`/`DELETE`, Body for others (`POST`/`PUT`/`PATCH`/`QUERY`/etc, when `body` is not defined).
 * `body`: (Optional) Explicit request body payload. If set, always travels in the request body.
 * `timeout`: (Optional) Request-specific timeout in milliseconds. You can also pass `options.timeout`.
 
@@ -255,12 +263,13 @@ const api = new uFetch("https://api.example.com", {
 #### `batch_old(url, method, items, headers, options, config) => Promise<Array<Result>>`
 * Legacy compatibility method using positional parameters instead of a single configuration object. Internally structures parameters and delegates execution to `batch()`.
 
-#### `get | post | put | patch | delete (opts)`
+#### `get | post | put | patch | delete | query (opts)`
 * Convenience wrappers for `request`. 
 * `opts`: `{ url, data, body, headers, options, timeout }`.
-  * `data`: Query parameters for `get`/`delete`, request body payload for `post`/`put`/`patch`.
+  * `data`: Query parameters for `get`/`delete`, request body payload for `post`/`put`/`patch`/`query`.
   * `body`: Explicit request body payload (always sent in HTTP body, takes precedence over `data` for the body).
   * `timeout`: Per-request timeout in milliseconds.
+* `query`: Sends the "QUERY" HTTP verb (draft IETF method) — semantically a safe/idempotent read like `GET`, but with `data`/`body` always sent as a JSON request body instead of a URL querystring. Useful for read operations whose filter payload is too complex or large for a query string. **Caveat**: `QUERY` is not yet a standardized/universally supported HTTP method — intermediate proxies, load balancers, or the target server may reject or rewrite it.
 
 #### `setTimeouts({ timeout, headersTimeout, bodyTimeout, socketTimeout })`
 * Updates the global timeout defaults for the instance.

@@ -42,6 +42,7 @@ const validMethods = new Set([
   "OPTIONS",
   "CONNECT",
   "TRACE",
+  "QUERY",
 ]);
 
 const resolveBatchItems = (items) => {
@@ -521,8 +522,8 @@ class uFetch {
    * Automatically injects Authorization headers and handles smart serialization.
    * 
    * @param {string} url - Final absolute URL, or internal relative path.
-   * @param {string} [method="GET"] - HTTP verb in uppercase (GET, POST, PUT, DELETE, PATCH, etc).
-   * @param {any} [data=undefined] - Parameters sent as a querystring for GET/HEAD/DELETE, or as request body for POST/PUT/PATCH (when body is not defined).
+   * @param {string} [method="GET"] - HTTP verb in uppercase (GET, POST, PUT, DELETE, PATCH, QUERY, etc).
+   * @param {any} [data=undefined] - Parameters sent as a querystring for GET/HEAD/DELETE, or as request body for POST/PUT/PATCH/QUERY (when body is not defined).
    * @param {Object} [headers={}] - Additional dictionary of ephemeral headers living only for this specific transaction.
    * @param {RequestInit & {timeout?: number}} [options={}] - Base object for strict overriding of primitive Fetch options (Credentials, Caching, Mode, custom Signal, etc).
    * @param {any} [body=undefined] - (Optional) Explicit body payload sent in the request body. If set, takes precedence over data for the HTTP body.
@@ -761,6 +762,19 @@ class uFetch {
   DELETE(opts = {}) {
     console.warn("DeprecationWarning: uFetch.DELETE() is deprecated. Use uFetch.delete() instead.");
     return this.delete(opts);
+  }
+
+  /**
+   * Triggers a safe/idempotent read query via the "QUERY" verb (draft IETF method), sending
+   * `opts.data` (or `opts.body`) as a JSON request body instead of a URL querystring — useful
+   * for read operations whose filter payload is too complex or large for a query string.
+   * Note: "QUERY" is not yet a standardized/universally supported HTTP method — intermediate
+   * proxies, load balancers, or the target server may reject or rewrite it.
+   * @param {{url?: string, data?: any, body?: any, headers?: Object, options?: RequestInit, timeout?: number}} opts
+   * @returns {Promise<Response>}
+   */
+  query(opts = {}) {
+    return this.request(opts.url, "QUERY", opts.data, opts.headers, opts.options, opts.body, opts.timeout);
   }
 
   /**
