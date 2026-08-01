@@ -290,3 +290,5 @@ const api = new uFetch("https://api.example.com", {
 - **Universal**: Works in Node.js 20+ and modern Browsers.
 - **Fail-Safe**: Ideal for bulk data processing where some nodes might fail.
 - **AI-Ready**: Predictable signatures and smart parameter merging.
+
+.
