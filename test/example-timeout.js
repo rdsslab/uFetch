@@ -64,20 +64,17 @@ const server = http.createServer((req, res) => {
 
   const batchResults = await client.batch({
     url: "/batch",
-    timeout: 200,
-    items: [
-      { data: { delay: 120 }, timeout: 30 },
-      { data: { delay: 20 } },
-    ],
+    timeout: 60,
+    items: { data: [{ delay: 200 }, { delay: 5 }] },
     config: {
       concurrency: 1,
     },
   });
 
   assert.equal(batchResults[0].isError, true);
-  assert.match(batchResults[0].error.message, /Request timed out after 30 ms/);
+  assert.match(batchResults[0].error.message, /Request timed out after 60 ms/);
   assert.equal(batchResults[1].isError, false);
-  assert.deepEqual(batchResults[1].data, { ok: true, delay: 20 });
+  assert.deepEqual(batchResults[1].data, { ok: true, delay: 5 });
 
   await close(server);
   console.log("Timeout tests passed");

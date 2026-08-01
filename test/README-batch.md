@@ -6,32 +6,27 @@ This guide explains how to use the advanced parallel batch processing features o
 - [example-batch.js](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/example-batch.js)
 
 ## Core Concept
-When calling `batch()`, you can provide base parameters like a default `url` or `method`. However, the base `url` parameter is completely **optional**. It should only be supplied if no base URL was passed to the class constructor, or if you explicitly want to change/override the URL defined in the constructor.
+When calling `batch()`, every item in the batch shares the exact same `url`, `method`, `headers`, `options` and `timeout` — there is no per-item override. The base `url` parameter is completely **optional**; it should only be supplied if no base URL was passed to the class constructor, or if you explicitly want to change/override the URL defined in the constructor.
 
-Additionally, the `items` parameter must be an array of requests to execute. Each element in the array can be one of:
-- **A Raw Payload**: A primitive value or a plain object (e.g., `{ edad: 12 }` or `"user_123"`). This payload is automatically treated as the request `data` (sent as body or query parameters depending on the method).
-- **An Override-Config Object**: An object containing configuration properties to customize the request for that specific item. If the object contains any of the special keys `{ url, method, data, headers, options }`, it overrides the base configuration. The actual request payload to be sent must be placed inside the `data` key (e.g., `{ data: { edad: 12 }, url: "/other-endpoint", method: "POST" }`).
-- **Object without 'data' but with overrides**: If you pass an object with other custom properties (like `{ name: "Edwin", url: "/users" }`) and it doesn't have a `data` key, the entire object itself is treated as the payload (`data`) but the `url` (and other special keys) are extracted as overrides.
+The `items` parameter accepts exactly one of two shapes:
+- **A plain array** (default, most common): each element is sent verbatim as the request `data` for every item (query parameters on `GET`/`HEAD`/`DELETE`, JSON body otherwise) — the same as calling `request(url, method, element, headers, options, undefined, timeout)` for each element. Elements are never inspected or partially extracted, regardless of what keys they contain.
+- **An object wrapper `{ data: [...] }` or `{ body: [...] }`**: chooses, for the whole batch, whether the list is sent through the `data` argument or forced through the `body` argument (mirroring `request()`'s own `data` vs `body` distinction). Each element inside the array is still sent verbatim.
+
+If you need a different URL, method or timeout for a specific payload, `batch()` is not the right tool — use `Promise.all` with individual `request()`/`get()`/`post()` calls instead.
 
 ### AI Agent Guidelines
-1. **Per-Item Overrides & Item Formats**: As described above, if the item has `url`, `method`, `headers`, `options` or `data`, the batch worker merges/overrides it with the base parameters:
-   - `url` and `method` will override the base URL/method.
-   - `headers` will merge (`{ ...baseHeaders, ...itemHeaders }`).
-   - `options` will merge (`{ ...baseOptions, ...itemOptions }`).
-   - `data` represents the request payload. If the item is an override-config object, it must contain a `data` key for its payload. If it doesn't contain a `data` key but has other overrides, the entire item object is treated as `data`.
+1. **`items` shape**:
+   - Plain array → sent as `data` to every item's request.
+   - `{ data: [...] }` → same as a plain array, explicit form.
+   - `{ body: [...] }` → forces every item through the `body` argument instead of `data`.
+   - Anything else (not an array, or an object without a `data`/`body` array property, or with both at once) throws a clear `Error`.
 1a. **Positional Arguments Restriction**: Positional parameters are unsupported in `batch()` and will throw an exception. Always wrap options inside a single configuration object. If positional parameters are strictly required for legacy integration, use the `batch_old()` method instead.
 2. **Execution**:
    ```javascript
-   const payloadList = [
-     { url: "https://httpbin.org/status/200", target: "200" }, // overrides base URL
-     { url: "https://httpbin.org/status/201", target: "201" },
-     { url: "https://httpbin.org/status/404", target: "404", method: "PUT" }, // overrides base URL & method
-   ];
-
    const results = await api.batch({
-     url: null,
+     url: "/get",
      method: "GET",
-     items: payloadList,
+     items: [{ id: 1 }, { id: 2 }, { id: 3 }],
      config: {
        concurrency: 3,
        onProgress: (info) => {

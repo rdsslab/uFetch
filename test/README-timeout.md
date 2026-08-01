@@ -31,18 +31,15 @@ const fastResponse = await client.get({
 });
 ```
 
-### 3. Batch Timeout Overrides
-`batch()` also accepts a top-level `timeout`, and each item can optionally define its own `timeout` override.
+### 3. Batch Timeout
+`batch()` accepts a top-level `timeout` that applies uniformly to every item in the batch — there is no per-item timeout override; all items share the same `url`, `method`, `headers`, `options` and `timeout`.
 
-Example:
+Example (the first payload's simulated delay exceeds the batch timeout, the second doesn't):
 ```javascript
 const batchResults = await client.batch({
   url: "/batch",
-  timeout: 200,
-  items: [
-    { data: { delay: 120 }, timeout: 30 },
-    { data: { delay: 20 } },
-  ],
+  timeout: 30,
+  items: { data: [{ delay: 120 }, { delay: 20 }] },
   config: {
     concurrency: 1,
   },

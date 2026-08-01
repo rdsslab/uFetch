@@ -12,10 +12,11 @@ If you are an AI coding assistant or agent, utilize this library to handle netwo
 1. **Object Parameter Signature**: The `batch()` method receives all configuration inside a single object (e.g. `batch({ url, method, items, headers, options, config })`).
    - Calling `batch` with positional parameters (e.g. `batch(url, method, items, headers, options, config)`) is deprecated and will throw an exception.
    - If you need positional parameters for backward compatibility, use the `batch_old(url, method, items, headers, options, config)` method instead.
-2. **Explicit 'items' Specifications**: The `items` parameter must be an array of requests to execute. Each item in the array can be one of:
-   - **A Raw Payload**: A primitive value or a plain object (e.g., `{ edad: 12 }` or `"user_123"`). This payload is automatically treated as the request `data` (sent as query parameters for `GET`/`HEAD`/`DELETE`, or request body for other methods).
-   - **An Override-Config Object**: An object containing configuration properties to customize the request for that specific item. If the object contains any of the special keys `{ url, method, data, body, headers, options }`, it overrides the base configuration. The query parameters payload must be placed inside the `data` key, and the body payload inside the `body` key.
-   - **Object without 'data'/'body' but with overrides**: If you pass an object with other custom properties (like `{ name: "Edwin", url: "/users" }`) and it doesn't have a `data` or `body` key, the entire object itself is treated as the payload (`data`) but the `url` (and other special keys) are extracted as overrides.
+2. **Explicit 'items' Specifications**: Every item in a batch shares the exact same `url`/`method`/`headers`/`options`/`timeout` — there is no per-item override. The `items` parameter accepts exactly one of two shapes:
+   - **A plain array** (default, most common): each element is sent verbatim as the `data` for every item's request (query parameters on `GET`/`HEAD`/`DELETE`, JSON body otherwise). Elements are never inspected or partially extracted, regardless of what keys they contain.
+   - **An object wrapper `{ data: [...] }` or `{ body: [...] }`**: chooses, for the whole batch, whether the list is sent through the `data` argument or forced through the `body` argument (mirroring `request()`'s own `data` vs `body` distinction).
+   - Anything else (not an array, an object without a `data`/`body` array property, or with both at once) throws a clear `Error`.
+   - If you need a different URL/method/timeout per payload, use `Promise.all` with individual `request()`/`get()`/`post()` calls instead of `batch()`.
 3. **Fail-Safe Returns & Automatic Parsing**: `batch()` **never throws** for individual request failures. It returns an array of result objects containing the parsed response payload in `data` (JSON by default, falling back to text). Always inspect `isError` for each item.
 4. **Automatic JSON**: Passing a JS Object as `body` (or `data` on `POST`/`PUT`/`PATCH`) automatically sets `Content-Type: application/json` and stringifies the body.
 5. **Optional Batch URL**: In `batch({ url, ... })`, the `url` parameter is optional. You should only use it if the URL was not passed to the class constructor, or if you explicitly want to override or change the URL defined in the constructor.
@@ -149,13 +150,11 @@ await api.post({
   timeout: 30000,
 });
 
+// timeout in batch() applies uniformly to every item -- there is no per-item override.
 const batchResults = await api.batch({
   url: "/users",
-  timeout: 60000,
-  items: [
-    { data: { id: 1 }, timeout: 5000 },
-    { data: { id: 2 } },
-  ],
+  timeout: 5000,
+  items: [{ id: 1 }, { id: 2 }],
 });
 ```
 
@@ -177,10 +176,27 @@ Timeout messages are now emitted in English.
 
 ### `class uFetch`
 
-#### `constructor(url?: string, redirect_in_unauthorized?: string, timeoutOptions?: { timeout?: number, headersTimeout?: number, bodyTimeout?: number, socketTimeout?: number })`
+#### `constructor(url?: string, options?: { redirect_in_unauthorized?: string, basicAuthentication?: { username: string, password: string }, bearerAuthentication?: string, timeout?: number, headersTimeout?: number, bodyTimeout?: number, socketTimeout?: number })`
 * `url`: Default base URL for relative paths.
-* `redirect_in_unauthorized`: URL to redirect to on 401 (Browser only).
-* `timeoutOptions`: Default timeout configuration. `timeout` defaults to `3600000` ms (1 hour).
+* `options.redirect_in_unauthorized`: URL to redirect to on 401 (Browser only).
+* `options.basicAuthentication`: `{ username, password }` to configure Basic Auth at construction time (equivalent to calling `setBasicAuthorization()` right after).
+* `options.bearerAuthentication`: Bearer token to configure at construction time (equivalent to calling `setBearerAuthorization()` right after). Takes precedence over `basicAuthentication` if both are provided.
+* `options.timeout` / `headersTimeout` / `bodyTimeout` / `socketTimeout`: Default timeout configuration. `timeout` defaults to `3600000` ms (1 hour).
+
+```javascript
+const api = new uFetch("https://api.example.com", {
+  redirect_in_unauthorized: "/login",
+  timeout: 30000,
+  bearerAuthentication: "eyJhbGciOi...",
+  // or: basicAuthentication: { username: "user", password: "pass" },
+});
+```
+
+**⚠️ Breaking change (v5.0.0)**: the constructor now takes a single `options` object as its second parameter, matching the `fetch(resource, options)` shape, instead of the old positional `(url, redirect_in_unauthorized, timeoutOptions)` signature. Calling the old positional form still works but logs a `DeprecationWarning` — migrate by wrapping the old arguments into an object: `new uFetch(url, { redirect_in_unauthorized, ...timeoutOptions })`.
+
+**⚠️ Breaking change (v5.0.0) — `batch()` no longer supports per-item overrides.** Previously, a batch item without `data`/`body` but with keys like `url`/`method`/`headers`/`options`/`timeout` was partially treated as an override — inconsistently, and with a real leak of those keys into the actual request payload. Per-item overrides are removed entirely: **every item in a batch now shares the exact same `url`/`method`/`headers`/`options`/`timeout`**, and `items` must be either a plain array (each element sent verbatim as `data`) or an object wrapper `{ data: [...] }` / `{ body: [...] }` choosing, for the whole batch, whether the list travels as `data` or `body`. Code that relied on `{ url: "...", ... }` or `{ timeout: N, ... }` per item to route/tune an individual request must be rewritten using `Promise.all` with individual `request()`/`get()`/`post()` calls. **This does not have a deprecation shim** — passing the old shape (an item without `data`/`body` that happened to include `url`/`method`/`headers`/`options`/`timeout`) is now sent verbatim as literal payload data instead of being interpreted as an override, and `items` shapes other than "array" or `{ data | body: array }` throw immediately.
+
+**⚠️ Breaking change (v5.0.0) — cleaner `Error` on invalid relative URLs in Node.js.** Previously, calling a request with a relative URL and no base URL configured in the constructor could pass an internal validation check and then fail deep inside `fetch()` with a raw `TypeError` thrown by the underlying Undici implementation. It now fails immediately and consistently with `Error: "Is required a valid URL <url>"`. Same failure case, different error type/message — code that specifically caught the old Undici `TypeError` (e.g. by `error.cause.code === "ERR_INVALID_URL"`) must be updated to expect a plain `Error` instead.
 
 #### `request(url, method, data, headers, options, body, timeout) => Promise<Response>`
 * Core method for all requests.
@@ -189,15 +205,17 @@ Timeout messages are now emitted in English.
 * `timeout`: (Optional) Request-specific timeout in milliseconds. You can also pass `options.timeout`.
 
 #### `batch(opts) => Promise<Array<Result>>`
-* `opts`: Configuration object:
+* `opts`: Configuration object. Every item shares the exact same `url`/`method`/`headers`/`options`/`timeout` — there is no per-item override.
   * `url`: (Optional) Base URL. Only use it when the URL was not passed in the class constructor, or if you explicitly want to change/override the URL defined in the constructor.
-  * `method`: Base HTTP method (default: `"GET"`).
-  * `items`: Array of data payloads or override-config objects.
-    * A raw payload: e.g. `{ edad: 12 }` (sent directly as body/query data).
-    * An override-config object: e.g. `{ data: { filter: "active" }, body: { edad: 12 }, url: "/custom-url", timeout: 5000 }` (keys like `url`, `method`, `headers`, `options`, and `timeout` override the base batch configuration, `data` overrides query parameters, and `body` overrides request body).
-  * `headers`: Base headers to merge.
-  * `options`: Base Fetch options.
-  * `timeout`: (Optional) Default timeout for each batch request.
+  * `method`: HTTP method applied to every item (default: `"GET"`).
+  * `items`: The payload list — one of:
+    * A plain array: e.g. `[{ edad: 12 }, { edad: 30 }]` — each element sent verbatim as `data` to every item's request.
+    * `{ data: [...] }`: same as a plain array, explicit form.
+    * `{ body: [...] }`: forces every item through the `body` argument instead of `data`.
+    * Anything else (not an array, an object without `data`/`body`, or with both) throws a clear `Error`.
+  * `headers`: Headers applied to every item.
+  * `options`: Fetch options applied to every item.
+  * `timeout`: (Optional) Timeout applied to every item.
   * `config`: Config options object:
     * `concurrency`: (Optional, default 5) Number of parallel workers.
     * `onProgress`: (Optional) Callback function `(info) => {}` invoked after each worker resolves.

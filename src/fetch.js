@@ -44,6 +44,35 @@ const validMethods = new Set([
   "TRACE",
 ]);
 
+const resolveBatchItems = (items) => {
+  if (Array.isArray(items)) {
+    return { list: items, sendAs: "data" };
+  }
+
+  if (items !== null && typeof items === "object") {
+    const hasData = Object.prototype.hasOwnProperty.call(items, "data");
+    const hasBody = Object.prototype.hasOwnProperty.call(items, "body");
+
+    if (hasData && hasBody) {
+      throw new Error("uFetch.batch(): 'items' cannot define both 'data' and 'body' at the same time. Use only one.");
+    }
+    if (hasData) {
+      if (!Array.isArray(items.data)) {
+        throw new Error("uFetch.batch(): 'items.data' must be an array.");
+      }
+      return { list: items.data, sendAs: "data" };
+    }
+    if (hasBody) {
+      if (!Array.isArray(items.body)) {
+        throw new Error("uFetch.batch(): 'items.body' must be an array.");
+      }
+      return { list: items.body, sendAs: "body" };
+    }
+  }
+
+  throw new Error("uFetch.batch(): 'items' must be an array, or an object containing a 'data' or 'body' array property.");
+};
+
 const defaultResponseParser = async (response) => {
   if (response.status === 204) {
     return null;
@@ -67,19 +96,53 @@ const defaultResponseParser = async (response) => {
  */
 class uFetch {
   /**
-   * Initializes the HTTP client instance.
+   * Initializes the HTTP client instance, mirroring the `fetch(resource, options)` shape.
    * @param {string} [url=undefined] - (Optional) Default base URL to use in requests.
-   * @param {string} [redirect_in_unauthorized=undefined] - (Optional) Route or URL to automatically redirect the client in case of 401 error (Only in Browser environment with window).
-   * @param {{timeout?: number, headersTimeout?: number, bodyTimeout?: number, socketTimeout?: number}} [timeoutOptions] - Default timeout configuration. The default request timeout is 1 hour.
+   * @param {{redirect_in_unauthorized?: string, timeout?: number, headersTimeout?: number, bodyTimeout?: number, socketTimeout?: number}} [options={}] - (Optional) Instance configuration.
+   * @param {string} [options.redirect_in_unauthorized] - Route or URL to automatically redirect the client in case of 401 error (Only in Browser environment with window).
+   * @param {{username: string, password: string}} [options.basicAuthentication] - Basic Auth credentials to configure at construction time.
+   * @param {string} [options.bearerAuthentication] - Bearer token to configure at construction time. Takes precedence over `basicAuthentication` if both are provided.
+   * @param {number} [options.timeout] - Default request timeout in milliseconds. Defaults to 1 hour.
+   * @param {number} [options.headersTimeout] - Undici headers timeout (Node.js only).
+   * @param {number} [options.bodyTimeout] - Undici body timeout (Node.js only).
+   * @param {number} [options.socketTimeout] - Undici socket timeout (Node.js only).
    */
-  constructor(url = undefined, redirect_in_unauthorized = undefined, timeoutOptions = DEFAULT_TIMEOUT_CONFIG) {
+  constructor(url = undefined, options = undefined, legacyTimeoutOptions = undefined) {
+    let redirect_in_unauthorized;
+    let basicAuthentication;
+    let bearerAuthentication;
+    let timeoutOptions;
+
+    // BC shim for the deprecated positional signature: (url, redirect_in_unauthorized, timeoutOptions)
+    if (typeof options === "string" || legacyTimeoutOptions !== undefined) {
+      console.warn(
+        "DeprecationWarning: new uFetch(url, redirect_in_unauthorized, timeoutOptions) is deprecated. " +
+        "Use new uFetch(url, options) instead, where options = { redirect_in_unauthorized, timeout, headersTimeout, bodyTimeout, socketTimeout }."
+      );
+      redirect_in_unauthorized = options;
+      timeoutOptions = legacyTimeoutOptions || {};
+    } else {
+      const { redirect_in_unauthorized: ru, basicAuthentication: ba, bearerAuthentication: bea, ...rest } = options || {};
+      redirect_in_unauthorized = ru;
+      basicAuthentication = ba;
+      bearerAuthentication = bea;
+      timeoutOptions = rest;
+    }
+
     this._redirect_in_unauthorized_internal = redirect_in_unauthorized;
     this._basic_authentication = undefined;
     this._bearer_authentication = undefined;
     this._url = url;
     this._defaultHeaders = new Map();
-    this._timeoutConfig = { ...DEFAULT_TIMEOUT_CONFIG, ...(timeoutOptions || {}) };
+    this._timeoutConfig = { ...DEFAULT_TIMEOUT_CONFIG, ...timeoutOptions };
     this._undiciDispatcher = undefined;
+
+    if (basicAuthentication && basicAuthentication.username && basicAuthentication.password) {
+      this.setBasicAuthorization(basicAuthentication.username, basicAuthentication.password);
+    }
+    if (bearerAuthentication) {
+      this.setBearerAuthorization(bearerAuthentication);
+    }
 
     this._refreshUndiciDispatcher();
 
@@ -294,7 +357,11 @@ class uFetch {
         abortFromSignal(sourceSignal);
         return {
           signal: controller.signal,
-          cleanup: () => {},
+          cleanup: () => {
+            for (const removeListener of listeners) {
+              removeListener();
+            }
+          },
         };
       }
 
@@ -488,11 +555,20 @@ class uFetch {
       }
     }
 
-    // URL Validation using try-catch for better compatibility
-    const baseURL =
-      typeof window !== "undefined" ? window.location.href : "http://localhost";
+    // URL resolution/validation that matches what the real fetch() call will accept.
+    // Browsers resolve relative URLs against window.location; Node.js has no implicit
+    // origin, so a relative URL without a configured base URL must fail here with a
+    // clear error instead of a cryptic low-level TypeError from the underlying fetch.
+    const hasBrowserOrigin =
+      typeof window !== "undefined" && typeof window.location !== "undefined";
+
+    if (!hasBrowserOrigin && !regexIsAbsolute.test(finalURL)) {
+      console.error("Is required a valid URL", finalURL);
+      throw new Error("Is required a valid URL " + finalURL);
+    }
+
     try {
-      new URL(finalURL, baseURL);
+      finalURL = new URL(finalURL, hasBrowserOrigin ? window.location.href : undefined).toString();
     } catch (e) {
       console.error("Is required a valid URL", finalURL);
       throw new Error("Is required a valid URL " + finalURL);
@@ -688,32 +764,38 @@ class uFetch {
   }
 
   /**
-   * Processes an array of items in parallel batches with a configured concurrency limit (Pool).
-   * Highly optimized for AI Agents and bulk data processing.
-   * 
+   * Processes a list of payloads in parallel batches with a configured concurrency limit (Pool).
+   * Every item in the batch shares the exact same `method`, `headers`, `options` and `timeout` —
+   * there is no per-item override. Highly optimized for AI Agents and bulk data processing.
+   *
    * NOTE: The signature batch(url, method, items, headers, options, config) with positional arguments
    * is deprecated and will now throw an exception. Use the single configuration object instead.
    * If you explicitly need to use positional parameters, use the batch_old() method.
-   * 
+   *
    * NOTE ON URL PARAMETER:
    * The `url` field in the batch input parameters is optional. It should only be used if the URL was not passed to the class constructor, or if you explicitly want to override/change the URL defined in the class constructor.
-   * 
+   *
    * SPECIFICATIONS FOR THE 'items' PROPERTY (CRITICAL FOR AI AGENTS):
-   * The 'items' parameter must be an Array. Each element in the array is processed as a separate request and can be:
-   * 1. A RAW PAYLOAD: A primitive value or a plain object without special keys (e.g. `{ edad: 12 }` or `"some-id"`).
-   *    - It is automatically treated as the request `data` (sent as the request body or query string according to the HTTP method).
-   * 2. An OVERRIDE-CONFIG OBJECT: An object containing any of these special keys: `{ url, method, data, body, headers, options }`.
-   *    - It merges with and overrides the base configuration parameters for that specific item's request (e.g. changing the endpoint or the method for a single item).
-   *    - When using this form, the query payload to be sent must be placed inside the `data` key, and the body payload inside the `body` key.
-   *    - If you pass an object with other keys (like `{ name: "Edwin", url: "/users" }`) and it doesn't have a `data` or `body` key, the entire object is treated as the payload (`data`) but the `url` (and other special keys) are extracted as overrides.
-   * 
+   * The 'items' parameter accepts exactly one of these two shapes:
+   * 1. A PLAIN ARRAY (default/most common): each element is sent verbatim as the `data` argument to
+   *    `request()` for every item — the same behavior as calling `request(url, method, element, headers, options, undefined, timeout)`.
+   *    Elements are never inspected or partially extracted, regardless of what keys they contain.
+   * 2. AN OBJECT WRAPPER `{ data: [...] }` OR `{ body: [...] }`: chooses, for the WHOLE batch, whether the
+   *    list is sent through the `data` argument (query string on GET/HEAD/DELETE, JSON body otherwise) or
+   *    forced through the `body` argument (always sent as the HTTP body, mirroring `request()`'s own
+   *    `data` vs `body` distinction). The array inside `data`/`body` is the actual list of payloads; each
+   *    element is still sent verbatim, with no per-item interpretation.
+   * `url`, `method`, `headers`, `options` and `timeout` always come from the top-level `opts` and apply
+   * identically to every item. If you need a different URL/method/timeout for a specific payload, use
+   * `Promise.all` with individual `request()`/`get()`/`post()` calls instead of `batch()`.
+   *
    * @param {Object} opts - Configuration options for the batch request.
    * @param {string} [opts.url] - (Optional) Base URL for requests (fallback). Should only be used when no URL was passed in the constructor, or if you explicitly want to change the URL defined in the constructor.
-   * @param {string} [opts.method="GET"] - Base HTTP verb (fallback).
-   * @param {Array<any>} opts.items - Collection to process. Supports raw data or override-config objects.
-   * @param {Object} [opts.headers={}] - Base headers to merge.
-  * @param {Object} [opts.options={}] - Base Fetch options (RequestInit).
-  * @param {number} [opts.timeout] - Default timeout applied to each request in the batch unless overridden by an item.
+   * @param {string} [opts.method="GET"] - HTTP verb applied to every item.
+   * @param {Array<any>|{data?: Array<any>, body?: Array<any>}} opts.items - The payload list: a plain array (sent as `data`), or `{ data: [...] }` / `{ body: [...] }` to choose how the whole batch is sent.
+   * @param {Object} [opts.headers={}] - Headers applied to every item.
+  * @param {Object} [opts.options={}] - Fetch options (RequestInit) applied to every item.
+  * @param {number} [opts.timeout] - Timeout applied to every request in the batch.
    * @param {Object} [opts.config={}] - Batch settings.
    * @param {number} [opts.config.concurrency=5] - Parallel worker limit.
    * @param {Function} [opts.config.onProgress] - Callback invoked after each request resolution: (info) => void.
@@ -757,11 +839,9 @@ class uFetch {
       includeResponse = false,
     } = reqConfig;
 
-    if (!Array.isArray(reqItems)) {
-      throw new Error("batch() expects an array of items");
-    }
+    const { list: reqItemsList, sendAs } = resolveBatchItems(reqItems);
 
-    const total = reqItems.length;
+    const total = reqItemsList.length;
     const results = new Array(total);
     let currentIndex = 0;
     let completed = 0;
@@ -769,50 +849,19 @@ class uFetch {
     const worker = async () => {
       while (currentIndex < total) {
         const index = currentIndex++;
-        const item = reqItems[index];
+        const item = reqItemsList[index];
         let resultPayload;
         let response = null;
 
         try {
-          let reqUrl = url;
-          let reqMethodVal = reqMethod;
-          let reqData = item;
-          let reqBodyVal = undefined;
-          let reqHeadersVal = reqHeaders;
-          let reqOptionsVal = reqOptions;
-          let reqTimeoutVal = reqTimeout;
-
-          // Smart detection: if item is an object that looks like a request config, use it to override base params
-          if (
-            typeof item === "object" &&
-            item !== null &&
-            (
-              item.url ||
-              item.method ||
-              item.hasOwnProperty("data") ||
-              item.hasOwnProperty("body") ||
-              item.hasOwnProperty("timeout") ||
-              item.headers ||
-              item.options
-            )
-          ) {
-            reqUrl = item.url || url;
-            reqMethodVal = item.method || reqMethod;
-            reqData = item.hasOwnProperty("data") ? item.data : (item.hasOwnProperty("body") ? undefined : item);
-            reqBodyVal = item.hasOwnProperty("body") ? item.body : undefined;
-            reqHeadersVal = item.headers ? { ...reqHeaders, ...item.headers } : reqHeaders;
-            reqOptionsVal = item.options ? { ...reqOptions, ...item.options } : reqOptions;
-            reqTimeoutVal = item.hasOwnProperty("timeout") ? item.timeout : reqTimeout;
-          }
-
           response = await this.request(
-            reqUrl,
-            reqMethodVal,
-            reqData,
-            reqHeadersVal,
-            reqOptionsVal,
-            reqBodyVal,
-            reqTimeoutVal
+            url,
+            reqMethod,
+            sendAs === "data" ? item : undefined,
+            reqHeaders,
+            reqOptions,
+            sendAs === "body" ? item : undefined,
+            reqTimeout
           );
 
           const parser = responseParser || defaultResponseParser;
