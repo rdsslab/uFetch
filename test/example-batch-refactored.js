@@ -130,28 +130,42 @@ async function run() {
     console.error("Test 8 failed:", error.message);
   }
 
-  // 9. Test item body override in batch
+  // 9. Test the batch-level `{ body: [...] }` wrapper: forces every item through the HTTP body
+  // instead of `data`. There is no per-item override anymore -- this choice applies to the whole batch.
   try {
-    console.log("\n9. Testing item body override in batch...");
+    console.log("\n9. Testing items wrapped as { body: [...] }...");
     const results = await api.batch({
       url: "https://httpbin.org/post",
       method: "POST",
-      items: [
-        {
-          body: { customBody: "Item 1 Body" },
-          headers: { "X-Custom": "Val1" }
-        },
-        {
-          body: { customBody: "Item 2 Body" }
-        }
-      ],
+      items: { body: [{ customBody: "Item 1 Body" }, { customBody: "Item 2 Body" }] },
       config: { concurrency: 2 }
     });
     console.log("-> Response 1 data reflected body:", results[0].data.json);
     console.log("-> Response 2 data reflected body:", results[1].data.json);
-    console.log("PASS! Item body override works in batch.");
+    const pass =
+      results[0].data.json.customBody === "Item 1 Body" &&
+      results[1].data.json.customBody === "Item 2 Body";
+    console.log(pass ? "PASS! items wrapped as { body: [...] } sends each element verbatim as the body." : "FAIL");
   } catch (error) {
     console.error("Test 9 failed:", error.message);
+  }
+
+  // 10. Confirm items are NEVER partially interpreted: an item that happens to contain keys named
+  // like `url`/`method`/`timeout` is sent verbatim as literal payload data, not extracted as an override.
+  try {
+    console.log("\n10. Testing that item keys are never extracted as per-item overrides...");
+    const results = await api.batch({
+      url: "https://httpbin.org/post",
+      method: "POST",
+      items: [{ name: "Edwin", url: "/should-not-be-used-as-override" }],
+      config: { concurrency: 1 }
+    });
+    const echoed = results[0].data.json;
+    const pass = echoed.name === "Edwin" && echoed.url === "/should-not-be-used-as-override";
+    console.log("-> Echoed payload:", echoed);
+    console.log(pass ? "PASS! The whole item was sent verbatim as literal payload data." : "FAIL");
+  } catch (error) {
+    console.error("Test 10 failed:", error.message);
   }
 }
 

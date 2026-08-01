@@ -22,6 +22,7 @@
     "test:post": "node test/example-post.js",
     "test:batch": "node test/example-batch.js",
     "test:batch-simple": "node test/example-batch-simple.js",
+    "test:batch-refactored": "node test/example-batch-refactored.js",
     "test:abort": "node test/example-request-abort.js",
     "test:timeout": "node test/example-timeout.js",
     "test:patch-delete": "node test/example-patch-delete.js",

@@ -70,14 +70,17 @@ api.get({
 ```
 
 ### 2. Fail-Safe Parallel Batch Processing
-Run a controlled pool of concurrent HTTP requests. It will never crash the overall Promise if a single request fails.
+Run a controlled pool of concurrent HTTP requests. It will never crash the overall Promise if a single request fails. Every item in the batch shares the exact same `url`/`method`/`headers`/`options`/`timeout` — there is no per-item override; each item is purely the payload for that request.
 
 ```javascript
 const api = new uFetch("https://api.example.com");
+
+// Default form: a plain array. Each element is sent verbatim as `data` to every request
+// (POST here, so it's JSON-encoded into the body -- same as calling api.post({ data: item }) per element).
 const items = [
-  { id: 1 }, 
-  { id: 2, method: "PUT" }, // Override method for this specific item
-  { url: "https://other-api.com/log", data: { msg: "test" } } // Complete override
+  { id: 1 },
+  { id: 2 },
+  { id: 3 },
 ];
 
 const results = await api.batch({
@@ -91,24 +94,50 @@ const results = await api.batch({
   }
 });
 
-// Response Schema for each item in results:
+// Response Schema for each item in results (same order as `items`):
 // { isError: boolean, httpCode: number|null, data?: any, response?: Response, error?: any }
 // Note: response object is only included if includeResponse: true is explicitly passed.
 ```
 
+**Choosing `data` vs `body` for the whole batch**: by default `items` (a plain array) is sent through `data`, which behaves like the `data` param of `request()` — query string on `GET`/`HEAD`/`DELETE`, JSON body otherwise. Wrap `items` in `{ data: [...] }` (explicit, same effect) or `{ body: [...] }` (always forces the HTTP body) if you need that instead. Note that `body` still follows regular HTTP rules — `GET`/`HEAD` requests cannot carry a body, so `{ body: [...] }` only makes sense with `POST`/`PUT`/`PATCH`/`DELETE`:
+
+```javascript
+// DELETE with a body payload (query-string DELETE wouldn't fit a structured reason):
+await api.batch({
+  url: "/comments",
+  method: "DELETE",
+  items: { body: [{ id: 1, reason: "spam" }, { id: 2, reason: "duplicate" }] },
+});
+```
+
+**There is no per-item `url`/`method`/`timeout` override.** If different payloads need to hit different endpoints or use different timeouts, `batch()` isn't the right tool — use `Promise.all` with individual calls instead:
+
+```javascript
+const results = await Promise.all([
+  api.get({ url: "/status/200" }),
+  api.get({ url: "/status/404", timeout: 2000 }),
+]);
+```
+
 ---
 
-## 📖 Detailed Guides & Examples (AI Agent Oriented)
+## 📂 Examples Index
 
-For complete code examples and detailed guidelines specifically formatted to help AI agents consume the API correctly, see the following guides:
+Every runnable example lives under [test/](test/) (plus one framework-agnostic snippet under [examples/](examples/)). Most have an `npm run` shortcut and a paired AI-agent-oriented guide with more detail:
 
-- [GET Requests Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-get.md): Explains query parameter serialization and idempotent reads.
-- [POST Requests Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-post.md): Details request body auto-serialization (JSON vs native bodies).
-- [PATCH & DELETE Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-patch-delete.md): Explains partial updates and resources deletion.
-- [Authentication & Request Cancellation Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-request-abort.md): Demonstrates Bearer tokens, custom request execution, and using `abort()`.
-- [Timeout Configuration Test Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-timeout.md): Demonstrates global timeouts, per-request overrides, and batch item timeout overrides.
-- [Simple Batch Processing Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-batch-simple.md): Highlights the new single configuration object signature for parallel request batching.
-- [Advanced Batch Processing Guide](file:///d:/edwinspire/OtrosProyectos/universal-fetch/test/README-batch.md): Details how to perform concurrent batches with per-item overrides and concurrency limits.
+| Example file | Run it | Guide | What it demonstrates |
+|---|---|---|---|
+| [test/example-get.js](test/example-get.js) | `npm run test:get` | [README-get.md](test/README-get.md) | GET requests, query-string serialization from `data`. |
+| [test/example-post.js](test/example-post.js) | `npm run test:post` | [README-post.md](test/README-post.md) | POST requests, automatic JSON body encoding. |
+| [test/example-patch-delete.js](test/example-patch-delete.js) | `npm run test:patch-delete` | [README-patch-delete.md](test/README-patch-delete.md) | PATCH (partial updates) and DELETE with query (`data`), body (`body`), or both at once. |
+| [test/example-request-abort.js](test/example-request-abort.js) | `npm run test:abort` | [README-request-abort.md](test/README-request-abort.md) | Low-level `request()`, Bearer auth, persistent instance headers (`addHeader`), and cancelling in-flight requests with `abort()`. |
+| [test/example-timeout.js](test/example-timeout.js) | `npm run test:timeout` | [README-timeout.md](test/README-timeout.md) | Instance-level timeout defaults (`setTimeouts`), per-request `timeout` overrides, and the uniform batch-level timeout. |
+| [test/example-batch.js](test/example-batch.js) | `npm run test:batch` | [README-batch.md](test/README-batch.md) | `batch()` parallel processing with `concurrency`, `onProgress`, and `includeResponse`. |
+| [test/example-batch-simple.js](test/example-batch-simple.js) | `npm run test:batch-simple` | [README-batch-simple.md](test/README-batch-simple.md) | Minimal `batch()` usage: a plain array of payloads sent to one endpoint. |
+| [test/example-batch-refactored.js](test/example-batch-refactored.js) | `npm run test:batch-refactored` | — | `batch()` input validation (single config object enforcement, `items` shape errors), `batch_old()` compatibility, `includeResponse`/`responseParser` options, the `{ data \| body: [...] }` wrapper, and that item keys are never extracted as per-item overrides. |
+| [examples/timeout_demo.js](examples/timeout_demo.js) | `node examples/timeout_demo.js` (illustrative — targets a placeholder URL, not runnable as-is) | — | Side-by-side Node.js and Browser (ESM) snippets for configuring timeouts. |
+
+Running `npm test` executes the core smoke suite (`get`, `post`, `batch`, `timeout`); the rest are run individually via their `npm run test:*` script.
 
 ---
 
