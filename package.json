@@ -1,6 +1,6 @@
 {
   "name": "@rdsslab/universal-fetch",
-  "description": "Class to use fetch in Nodejs and in the browser",
+  "description": "Class to use fetch in Nodejs and in the browser.",
   "version": "5.1.0",
   "author": "edwinspire <edwinspire@gmail.com>",
   "type": "commonjs",
