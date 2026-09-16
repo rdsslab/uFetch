@@ -17,7 +17,7 @@ If you are an AI coding assistant or agent, utilize this library to handle netwo
    - **An object wrapper `{ data: [...] }` or `{ body: [...] }`**: chooses, for the whole batch, whether the list is sent through the `data` argument or forced through the `body` argument (mirroring `request()`'s own `data` vs `body` distinction).
    - Anything else (not an array, an object without a `data`/`body` array property, or with both at once) throws a clear `Error`.
    - If you need a different URL/method/timeout per payload, use `Promise.all` with individual `request()`/`get()`/`post()` calls instead of `batch()`.
-3. **Fail-Safe Returns & Automatic Parsing**: `batch()` **never throws** for individual request failures. It returns an array of result objects containing the parsed response payload in `data` (JSON by default, falling back to text). Always inspect `isError` for each item.
+3. **Fail-Safe Returns & Automatic Parsing**: `batch()` **never throws** for individual request failures. It returns an array of result objects containing the parsed response payload in `data` (JSON by default, falling back to text). Always inspect `isError` for each item. `isError` is `true` for **network failures** (the original exception is in `error`) AND for **HTTP error statuses** (>= 400, e.g. 400/404/500); in the HTTP case the body is still parsed into `data` and `error` is an `Error` describing the status code.
 4. **Automatic JSON**: Passing a JS Object as `body` (or `data` on `POST`/`PUT`/`PATCH`) automatically sets `Content-Type: application/json` and stringifies the body.
 5. **Optional Batch URL**: In `batch({ url, ... })`, the `url` parameter is optional. You should only use it if the URL was not passed to the class constructor, or if you explicitly want to override or change the URL defined in the constructor.
 
@@ -104,6 +104,8 @@ const results = await api.batch({
 
 // Response Schema for each item in results (same order as `items`):
 // { isError: boolean, httpCode: number|null, data?: any, response?: Response, error?: any }
+// isError is true for transport failures (error = original exception) and for HTTP status >= 400
+// (error = Error("HTTP <status>"), data still holds the parsed error body). 2xx/3xx → isError: false.
 // Note: response object is only included if includeResponse: true is explicitly passed.
 ```
 

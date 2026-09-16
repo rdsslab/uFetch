@@ -455,6 +455,10 @@ class uFetch {
   }
 
   _normalizeHeaders(headers = {}, data = undefined) {
+    if (headers == null) {
+      headers = {};
+    }
+
     const h = new Headers();
 
     // Helper to add headers from various sources
@@ -816,6 +820,10 @@ class uFetch {
    * @param {Function} [opts.config.responseParser] - (Optional) Custom extractor function for the response payload: async (response) => data.
    * @param {boolean} [opts.config.includeResponse=false] - (Optional) If true, includes the raw Fetch 'response' object in the result descriptor.
    * @returns {Promise<Array<{isError: boolean, httpCode: number|null, data?: any, response?: Response, error?: any}>>} Array of result descriptors (ordered).
+   * Each descriptor sets `isError` to `true` when the item failed at the network level (request/parse threw)
+   * OR when the server answered with an HTTP error status (>= 400). For HTTP error responses the body is
+   * still parsed into `data` and `error` is an `Error` describing the status; for transport failures `data`
+   * is omitted and `error` is the original exception.
    */
   async batch(opts = {}) {
     if (arguments.length > 1) {
@@ -878,14 +886,21 @@ class uFetch {
             reqTimeout
           );
 
+          const isHttpError = response.status >= 400;
           const parser = responseParser || defaultResponseParser;
           const parsedData = await parser(response);
 
           resultPayload = {
-            isError: false,
+            isError: isHttpError,
             httpCode: response.status,
             data: parsedData,
           };
+
+          if (isHttpError) {
+            const statusText = response.statusText ? ` ${response.statusText}` : "";
+            resultPayload.error = new Error(`HTTP ${response.status}${statusText}`);
+          }
+
           if (includeResponse) {
             resultPayload.response = response;
           }
@@ -919,7 +934,8 @@ class uFetch {
     };
 
     const workers = [];
-    const poolSize = Math.min(concurrency, total);
+    const safeConcurrency = Math.max(1, Math.floor(Number(concurrency) || 1));
+    const poolSize = Math.min(safeConcurrency, total);
     for (let i = 0; i < poolSize; i++) {
       workers.push(worker());
     }

@@ -167,6 +167,65 @@ async function run() {
   } catch (error) {
     console.error("Test 10 failed:", error.message);
   }
+
+  // 11. HTTP error statuses (>= 400) must report isError: true while still parsing the body into data.
+  try {
+    console.log("\n11. Testing isError on HTTP error statuses (400, 404, 500)...");
+    const reports = [];
+    for (const status of [400, 404, 500]) {
+      const results = await api.batch({
+        url: `https://httpbin.org/status/${status}`,
+        method: "GET",
+        items: [{ id: status }],
+        config: { concurrency: 1 }
+      });
+      reports.push(results[0]);
+    }
+
+    const pass =
+      reports[0].isError === true && reports[0].httpCode === 400 &&
+      reports[1].isError === true && reports[1].httpCode === 404 &&
+      reports[2].isError === true && reports[2].httpCode === 500 &&
+      reports.every((r) => r.error && r.error.message.includes(String(r.httpCode)));
+    console.log(
+      "-> HTTP errors:", reports.map((r) => `${r.httpCode}/isError=${r.isError}/msg=${r.error && r.error.message}`).join(" | ")
+    );
+    console.log(pass ? "PASS! isError=true on HTTP 400/404/500 with error populated." : "FAIL");
+  } catch (error) {
+    console.error("Test 11 failed:", error.message);
+  }
+
+  // 12. A successful 2xx response must keep isError: false (regression guard).
+  try {
+    console.log("\n12. Testing isError=false on a successful 2xx response...");
+    const results = await api.batch({
+      url: "https://httpbin.org/status/200",
+      method: "GET",
+      items: [{ id: 1 }],
+      config: { concurrency: 1 }
+    });
+    const pass = results[0].isError === false && results[0].httpCode === 200;
+    console.log(`-> HTTP 200 result: httpCode=${results[0].httpCode} isError=${results[0].isError}`);
+    console.log(pass ? "PASS! isError=false on HTTP 200." : "FAIL");
+  } catch (error) {
+    console.error("Test 12 failed:", error.message);
+  }
+
+  // 13. Non-positive/NaN concurrency must not silently skip items (it should fall back to 1 worker).
+  try {
+    console.log("\n13. Testing safe concurrency fallback (concurrency: 0)...");
+    const results = await api.batch({
+      url: "https://httpbin.org/post",
+      method: "POST",
+      items: [{ name: "A" }, { name: "B" }],
+      config: { concurrency: 0 }
+    });
+    const pass = results.length === 2 && results[0].data && results[1].data;
+    console.log(`-> Processed ${results.length} items with concurrency 0.`);
+    console.log(pass ? "PASS! Items still processed, concurrency normalized to 1." : "FAIL");
+  } catch (error) {
+    console.error("Test 13 failed:", error.message);
+  }
 }
 
 run();

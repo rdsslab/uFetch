@@ -38,7 +38,9 @@ If you need a different URL, method or timeout for a specific payload, `batch()`
 
 ## Fail-Safe Approach & Automatic Parsing
 The batch mechanism is designed to handle network errors, timeouts, or bad HTTP status codes without failing the outer Promise:
-- If a request fails or throws, its index in the output array will have `isError: true` and `error` populated.
+- If a request throws (transport failure, timeout, parse error), its index in the output array will have `isError: true` and `error` populated with the original exception.
+- If the server answers with an **HTTP error status (>= 400, e.g. 400/404/500)**, the item also reports `isError: true`; its body is still parsed into `data` and `error` is an `Error` describing the status (e.g. `HTTP 500`).
+- Successful HTTP responses (2xx/3xx) report `isError: false` with the parsed payload in `data`.
 - Other requests in the batch will continue running normally.
 - **Automatic Deserialization**: Response bodies are automatically parsed (JSON by default, with a fallback to raw text) and saved in the `data` property of each result item.
 - **Custom Parsing**: You can provide a custom extraction logic using `config.responseParser: async (response) => data`.
