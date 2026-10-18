@@ -243,8 +243,20 @@ class uFetch {
    * @returns {uFetch} Returns the class for context chaining.
    */
   setBearerAuthorization(key) {
-    this._bearer_authentication = key ? `Bearer ${key}` : undefined;
-    if (key) this._basic_authentication = undefined;
+    if (typeof key === "string" && key.trim() !== "") {
+      this._bearer_authentication = `Bearer ${key.trim()}`;
+      this._basic_authentication = undefined;
+      return this;
+    }
+    if (key != null && key !== "") {
+      console.warn(
+        "uFetch.setBearerAuthorization: se esperaba un string y se recibió " +
+          (key === null ? "null" : typeof key === "object" ? (key.constructor && key.constructor.name ? key.constructor.name : "Object") : typeof key) +
+          "; no se envía Authorization."
+      );
+    }
+    this._bearer_authentication = undefined;
+    this._basic_authentication = undefined;
     return this;
   }
 
@@ -255,6 +267,9 @@ class uFetch {
    * @param {string} value - String value of the header.
    */
   addHeader(key, value) {
+    if (typeof value === "object" && value !== null && !(typeof Headers !== "undefined" && value instanceof Headers) && !(typeof Map !== "undefined" && value instanceof Map)) {
+      console.warn("uFetch.addHeader: el valor para '" + key + "' es un objeto; se convertirá a texto.");
+    }
     this._defaultHeaders.set(key, value);
   }
 
@@ -462,19 +477,30 @@ class uFetch {
     const h = new Headers();
 
     // Helper to add headers from various sources
-    const addFn = (v, k) => h.append(k, v);
+    const addFn = (v, k) => {
+      if (typeof v === "object" && v !== null && !(typeof Headers !== "undefined" && v instanceof Headers) && !(typeof Map !== "undefined" && v instanceof Map)) {
+        console.warn("uFetch: valor de header '" + k + "' es un objeto; se convertirá a texto.");
+      }
+      h.append(k, v);
+    };
 
     if (headers instanceof Headers || headers instanceof Map) {
       headers.forEach(addFn);
     } else {
       // iterate over object
       for (const [k, v] of Object.entries(headers)) {
+        if (typeof v === "object" && v !== null && !(typeof Headers !== "undefined" && v instanceof Headers) && !(typeof Map !== "undefined" && v instanceof Map)) {
+          console.warn("uFetch: valor de header '" + k + "' es un objeto; se convertirá a texto.");
+        }
         h.append(k, v);
       }
     }
 
     // agregar headers por defecto
     for (const [k, v] of this._defaultHeaders.entries()) {
+      if (typeof v === "object" && v !== null && !(typeof Headers !== "undefined" && v instanceof Headers) && !(typeof Map !== "undefined" && v instanceof Map)) {
+        console.warn("uFetch: valor de header '" + k + "' es un objeto; se convertirá a texto.");
+      }
       h.set(k, v);
     }
 
